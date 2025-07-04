@@ -1,6 +1,6 @@
-# Capture Prompts: AI Development Records for Git
+# git-llm
 
-A comprehensive research project exploring methods to capture and preserve LLM prompts alongside code changes, creating a new category of development artifact: the "AI Development Record."
+🔬 Research project exploring the intersection of AI-assisted development and version control. How should we preserve the context of LLM interactions that generate code? This repository investigates various approaches to capturing, storing, and retrieving AI prompts within Git workflows.
 
 ## 🎯 Problem Statement
 
@@ -19,7 +19,7 @@ This project researches and implements various approaches to capture, store, and
 ## 📚 Repository Structure
 
 ```
-capture-prompts/
+git-llm/
 ├── capture-prompts-evaluation.md  # Synthesis and recommendations
 ├── prompt-capture-design.md       # Technical implementation approaches
 ├── ux-design-overview.md         # User experience design
