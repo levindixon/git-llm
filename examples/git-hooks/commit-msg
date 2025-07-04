@@ -1,0 +1,133 @@
+#!/bin/bash
+# Git hook to validate and store LLM prompts from commit messages
+# Place this file in .git/hooks/commit-msg and make it executable
+
+COMMIT_MSG_FILE=$1
+
+# Function to extract prompt metadata from commit message
+extract_prompt_metadata() {
+    local prompt=""
+    local model=""
+    local timestamp=""
+    
+    while IFS= read -r line; do
+        case "$line" in
+            "LLM-Prompt: "*)
+                prompt="${line#LLM-Prompt: }"
+                ;;
+            "LLM-Model: "*)
+                model="${line#LLM-Model: }"
+                ;;
+            "LLM-Timestamp: "*)
+                timestamp="${line#LLM-Timestamp: }"
+                ;;
+        esac
+    done < "$COMMIT_MSG_FILE"
+    
+    echo "$prompt|$model|$timestamp"
+}
+
+# Function to validate prompt format
+validate_prompt() {
+    local prompt="$1"
+    
+    # Check if prompt is empty
+    if [ -z "$prompt" ]; then
+        return 1
+    fi
+    
+    # Check minimum length (optional)
+    if [ ${#prompt} -lt 10 ]; then
+        echo "Error: LLM prompt too short (minimum 10 characters)" >&2
+        return 1
+    fi
+    
+    # Check for suspicious content (optional)
+    if echo "$prompt" | grep -qE '(password|secret|key|token)'; then
+        echo "Warning: Prompt may contain sensitive information" >&2
+        # Don't fail, just warn
+    fi
+    
+    return 0
+}
+
+# Function to store prompt in .prompts directory
+store_prompt_metadata() {
+    local prompt="$1"
+    local model="$2"
+    local timestamp="$3"
+    
+    # Only store if prompt exists
+    if [ -z "$prompt" ]; then
+        return 0
+    fi
+    
+    # Create directory structure
+    mkdir -p .prompts/by-date/$(date +%Y/%m/%d)
+    mkdir -p .prompts/by-hash
+    
+    # Get commit info (this will be the previous commit + our changes)
+    local temp_commit_info=$(git diff --cached --name-status)
+    
+    # Create JSON file
+    local json_file=".prompts/by-hash/pending-$(date +%s).json"
+    
+    cat > "$json_file" << EOF
+{
+    "prompt": "$prompt",
+    "model": "$model",
+    "timestamp": "$timestamp",
+    "commit_info": "pending",
+    "files_changed": [
+$(git diff --cached --name-only | sed 's/^/        "/' | sed 's/$/",/' | sed '$ s/,$//')
+    ],
+    "commit_message": "$(head -n1 "$COMMIT_MSG_FILE")"
+}
+EOF
+    
+    # Add the JSON file to be committed (optional)
+    # git add "$json_file"
+    
+    return 0
+}
+
+# Function to ensure consistent trailer format
+format_trailers() {
+    local temp_file=$(mktemp)
+    local in_trailer_section=false
+    local has_blank_line=false
+    
+    while IFS= read -r line; do
+        if [ -z "$line" ] && [ "$in_trailer_section" = false ]; then
+            has_blank_line=true
+            echo "$line" >> "$temp_file"
+        elif [[ "$line" =~ ^[A-Za-z0-9-]+:\ .+ ]] && [ "$has_blank_line" = true ]; then
+            in_trailer_section=true
+            echo "$line" >> "$temp_file"
+        else
+            echo "$line" >> "$temp_file"
+        fi
+    done < "$COMMIT_MSG_FILE"
+    
+    mv "$temp_file" "$COMMIT_MSG_FILE"
+}
+
+# Main execution
+metadata=$(extract_prompt_metadata)
+IFS='|' read -r prompt model timestamp <<< "$metadata"
+
+# Validate prompt if it exists
+if [ ! -z "$prompt" ]; then
+    if ! validate_prompt "$prompt"; then
+        echo "Commit aborted due to invalid LLM prompt" >&2
+        exit 1
+    fi
+    
+    # Store prompt metadata
+    store_prompt_metadata "$prompt" "$model" "$timestamp"
+fi
+
+# Format trailers to ensure Git compatibility
+format_trailers
+
+exit 0

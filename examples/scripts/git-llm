@@ -1,0 +1,311 @@
+#!/bin/bash
+# git-llm: A Git extension for managing LLM prompts
+# Usage: git llm <command> [options]
+
+set -e
+
+PROMPTS_DIR=".prompts"
+NOTES_REF="refs/notes/llm-prompts"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to display usage
+usage() {
+    cat << EOF
+git-llm - Manage LLM prompts in Git repositories
+
+Usage:
+    git llm add <prompt> [--model <model>]     Add prompt to next commit
+    git llm show [<commit>]                     Show prompt for commit
+    git llm list [--format json|text]          List all prompts
+    git llm search <pattern>                    Search prompts
+    git llm export [--output <file>]           Export all prompts
+    git llm import <file>                       Import prompts
+    git llm init                                Initialize prompt tracking
+
+Options:
+    -h, --help                                  Show this help message
+    -m, --model <model>                         Specify LLM model
+    -f, --format <format>                       Output format (json, text)
+    -o, --output <file>                         Output file
+
+Examples:
+    git llm add "Implement user authentication"
+    git llm show HEAD
+    git llm search "authentication"
+    git llm export --output prompts.json
+
+EOF
+}
+
+# Function to initialize prompt tracking
+init_prompts() {
+    echo "Initializing LLM prompt tracking..."
+    
+    # Create prompts directory
+    mkdir -p "$PROMPTS_DIR"/{by-hash,by-date}
+    
+    # Create config file
+    cat > "$PROMPTS_DIR/config.json" << EOF
+{
+    "version": "1.0",
+    "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+    "storage": {
+        "use_trailers": true,
+        "use_notes": true,
+        "use_directory": true
+    }
+}
+EOF
+    
+    # Create .gitignore for temporary files
+    cat > "$PROMPTS_DIR/.gitignore" << EOF
+*.tmp
+*.bak
+pending-*.json
+EOF
+    
+    # Copy hooks if they don't exist
+    if [ ! -f ".git/hooks/prepare-commit-msg" ]; then
+        cp "$(dirname "$0")/../git-hooks/prepare-commit-msg" .git/hooks/
+        chmod +x .git/hooks/prepare-commit-msg
+    fi
+    
+    if [ ! -f ".git/hooks/commit-msg" ]; then
+        cp "$(dirname "$0")/../git-hooks/commit-msg" .git/hooks/
+        chmod +x .git/hooks/commit-msg
+    fi
+    
+    echo -e "${GREEN}✓ Prompt tracking initialized${NC}"
+}
+
+# Function to add prompt for next commit
+add_prompt() {
+    local prompt="$1"
+    local model="${2:-unknown}"
+    
+    if [ -z "$prompt" ]; then
+        echo -e "${RED}Error: Prompt cannot be empty${NC}" >&2
+        exit 1
+    fi
+    
+    # Store prompt for next commit
+    echo "$prompt" > .current-llm-prompt
+    echo "$model" > .current-llm-model
+    
+    echo -e "${GREEN}✓ Prompt saved for next commit${NC}"
+    echo -e "${YELLOW}Model:${NC} $model"
+    echo -e "${YELLOW}Prompt:${NC} $prompt"
+}
+
+# Function to show prompt for a commit
+show_prompt() {
+    local commit="${1:-HEAD}"
+    local commit_hash=$(git rev-parse "$commit" 2>/dev/null || echo "")
+    
+    if [ -z "$commit_hash" ]; then
+        echo -e "${RED}Error: Invalid commit reference${NC}" >&2
+        exit 1
+    fi
+    
+    echo -e "${YELLOW}Commit:${NC} $commit_hash"
+    echo ""
+    
+    # Try to get prompt from commit message trailers
+    local trailers=$(git log -1 --format="%(trailers)" "$commit_hash")
+    if echo "$trailers" | grep -q "^LLM-Prompt:"; then
+        echo -e "${GREEN}From commit trailers:${NC}"
+        echo "$trailers" | grep "^LLM-"
+    fi
+    
+    # Try to get prompt from notes
+    local note=$(git notes --ref="$NOTES_REF" show "$commit_hash" 2>/dev/null || echo "")
+    if [ ! -z "$note" ]; then
+        echo -e "${GREEN}From git notes:${NC}"
+        echo "$note"
+    fi
+    
+    # Try to get prompt from directory
+    local prompt_file="$PROMPTS_DIR/by-hash/${commit_hash:0:7}.json"
+    if [ -f "$prompt_file" ]; then
+        echo -e "${GREEN}From prompts directory:${NC}"
+        cat "$prompt_file" | jq '.' 2>/dev/null || cat "$prompt_file"
+    fi
+}
+
+# Function to list all prompts
+list_prompts() {
+    local format="${1:-text}"
+    
+    if [ "$format" = "json" ]; then
+        echo "["
+        local first=true
+        
+        # List from commit trailers
+        git log --format="%H|%(trailers:key=LLM-Prompt)" | while IFS='|' read -r hash prompt; do
+            if [ ! -z "$prompt" ]; then
+                if [ "$first" = true ]; then
+                    first=false
+                else
+                    echo ","
+                fi
+                echo -n "  {\"commit\": \"$hash\", \"prompt\": \"$prompt\"}"
+            fi
+        done
+        
+        echo ""
+        echo "]"
+    else
+        # Text format
+        echo -e "${YELLOW}LLM Prompts in Repository:${NC}"
+        echo ""
+        
+        git log --format="%h %s%n%(trailers:key=LLM-Prompt)" | \
+        awk '/^[0-9a-f]{7}/ {if (commit) print ""; commit=$0} 
+             /^LLM-Prompt:/ {print commit; print "  " $0; commit=""}'
+    fi
+}
+
+# Function to search prompts
+search_prompts() {
+    local pattern="$1"
+    
+    if [ -z "$pattern" ]; then
+        echo -e "${RED}Error: Search pattern required${NC}" >&2
+        exit 1
+    fi
+    
+    echo -e "${YELLOW}Searching for: $pattern${NC}"
+    echo ""
+    
+    # Search in commit messages
+    git log --grep="LLM-Prompt:.*$pattern" --format="%h %s" | while read -r line; do
+        echo -e "${GREEN}Commit:${NC} $line"
+        git log -1 --format="%(trailers:key=LLM-Prompt)" "${line%% *}"
+        echo ""
+    done
+    
+    # Search in prompt files
+    if [ -d "$PROMPTS_DIR/by-hash" ]; then
+        grep -r "$pattern" "$PROMPTS_DIR/by-hash" 2>/dev/null | while read -r result; do
+            echo -e "${GREEN}File:${NC} $result"
+        done
+    fi
+}
+
+# Function to export all prompts
+export_prompts() {
+    local output="${1:-prompts-export.json}"
+    
+    echo -e "${YELLOW}Exporting prompts to: $output${NC}"
+    
+    cat > "$output" << EOF
+{
+    "export_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+    "repository": "$(git config --get remote.origin.url || echo "local")",
+    "prompts": [
+EOF
+    
+    local first=true
+    git log --format="%H|%s|%aI|%(trailers:key=LLM-Prompt,valueonly)" | while IFS='|' read -r hash subject date prompt; do
+        if [ ! -z "$prompt" ]; then
+            if [ "$first" = true ]; then
+                first=false
+            else
+                echo "," >> "$output"
+            fi
+            cat >> "$output" << EOF
+        {
+            "commit": "$hash",
+            "subject": "$subject",
+            "date": "$date",
+            "prompt": "$prompt"
+        }
+EOF
+        fi
+    done
+    
+    cat >> "$output" << EOF
+
+    ]
+}
+EOF
+    
+    echo -e "${GREEN}✓ Export complete${NC}"
+}
+
+# Main command dispatcher
+case "${1:-help}" in
+    init)
+        init_prompts
+        ;;
+    add)
+        shift
+        prompt="$1"
+        shift
+        model=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -m|--model)
+                    model="$2"
+                    shift 2
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        add_prompt "$prompt" "$model"
+        ;;
+    show)
+        show_prompt "$2"
+        ;;
+    list)
+        shift
+        format="text"
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -f|--format)
+                    format="$2"
+                    shift 2
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        list_prompts "$format"
+        ;;
+    search)
+        search_prompts "$2"
+        ;;
+    export)
+        shift
+        output=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -o|--output)
+                    output="$2"
+                    shift 2
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        export_prompts "$output"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        echo -e "${RED}Error: Unknown command '$1'${NC}" >&2
+        echo ""
+        usage
+        exit 1
+        ;;
+esac

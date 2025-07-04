@@ -1,0 +1,75 @@
+#!/bin/bash
+# Git hook to automatically include LLM prompts in commit messages
+# Place this file in .git/hooks/prepare-commit-msg and make it executable
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+SHA1=$3
+
+# Function to add prompt from environment variable
+add_prompt_from_env() {
+    if [ ! -z "$LLM_PROMPT" ]; then
+        echo "" >> "$COMMIT_MSG_FILE"
+        echo "LLM-Prompt: $LLM_PROMPT" >> "$COMMIT_MSG_FILE"
+        echo "LLM-Model: ${LLM_MODEL:-unknown}" >> "$COMMIT_MSG_FILE"
+        echo "LLM-Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$COMMIT_MSG_FILE"
+    fi
+}
+
+# Function to add prompt from file
+add_prompt_from_file() {
+    if [ -f ".current-llm-prompt" ]; then
+        prompt=$(cat .current-llm-prompt)
+        model=$(cat .current-llm-model 2>/dev/null || echo "unknown")
+        
+        echo "" >> "$COMMIT_MSG_FILE"
+        echo "LLM-Prompt: $prompt" >> "$COMMIT_MSG_FILE"
+        echo "LLM-Model: $model" >> "$COMMIT_MSG_FILE"
+        echo "LLM-Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$COMMIT_MSG_FILE"
+        
+        # Clean up temporary files
+        rm -f .current-llm-prompt .current-llm-model
+    fi
+}
+
+# Function to format multiline prompts
+format_multiline_prompt() {
+    local prompt_file=".current-llm-prompt"
+    if [ -f "$prompt_file" ]; then
+        echo "" >> "$COMMIT_MSG_FILE"
+        echo "LLM-Prompt: |" >> "$COMMIT_MSG_FILE"
+        while IFS= read -r line; do
+            echo "  $line" >> "$COMMIT_MSG_FILE"
+        done < "$prompt_file"
+        echo "LLM-Model: ${LLM_MODEL:-unknown}" >> "$COMMIT_MSG_FILE"
+        echo "LLM-Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$COMMIT_MSG_FILE"
+        
+        rm -f "$prompt_file"
+    fi
+}
+
+# Main execution
+case "$COMMIT_SOURCE" in
+    message)
+        # Commit with -m flag
+        add_prompt_from_env
+        add_prompt_from_file
+        ;;
+    template)
+        # Commit with template
+        add_prompt_from_file
+        ;;
+    merge)
+        # Merge commit - usually don't add prompts
+        ;;
+    squash)
+        # Squash commit - preserve existing prompts
+        ;;
+    *)
+        # Default case
+        add_prompt_from_env
+        add_prompt_from_file
+        ;;
+esac
+
+exit 0

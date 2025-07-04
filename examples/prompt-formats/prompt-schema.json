@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LLM Prompt Metadata Schema",
+  "type": "object",
+  "required": ["version", "prompt", "timestamp"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "enum": ["1.0"],
+      "description": "Schema version"
+    },
+    "prompt": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The actual prompt text sent to the LLM"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["feature", "fix", "refactor", "docs", "test", "chore", "other"],
+          "description": "Type of task the prompt is for"
+        },
+        "context": {
+          "type": "string",
+          "description": "Additional context provided with the prompt"
+        }
+      }
+    },
+    "llm": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "LLM model used"
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["openai", "anthropic", "google", "microsoft", "other"],
+          "description": "LLM provider"
+        },
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "temperature": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2
+            },
+            "max_tokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "top_p": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the prompt was created"
+    },
+    "commit": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$",
+          "description": "Git commit hash"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Git branch name"
+        },
+        "author": {
+          "type": "string",
+          "description": "Commit author"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Unique session identifier"
+        },
+        "project": {
+          "type": "string",
+          "description": "Project name or identifier"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags for categorization"
+        },
+        "files_affected": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files modified based on this prompt"
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "Brief summary of the LLM response"
+        },
+        "tokens_used": {
+          "type": "integer",
+          "description": "Number of tokens used in the response"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "description": "Response generation time in milliseconds"
+        },
+        "success": {
+          "type": "boolean",
+          "description": "Whether the task was completed successfully"
+        }
+      }
+    }
+  }
+}
